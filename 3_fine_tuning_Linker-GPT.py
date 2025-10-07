@@ -39,10 +39,16 @@ if __name__ == '__main__':
                         help="total epochs", required=False)
     parser.add_argument('--batch_size', type=int, default=128,
                         help="batch size", required=False)
-    parser.add_argument('--learning_rate', type=int,
+    parser.add_argument('--learning_rate', type=float,
                         default=6e-4, help="learning rate", required=False)
     parser.add_argument('--lstm_layers', type=int, default=0,
                         help="number of layers in lstm", required=False)
+    parser.add_argument('--data_path', type=str, default='data/QM9.csv',
+                        help="path of data csv", required=False)
+    parser.add_argument('--props', nargs='+', default=['qed'],
+                        help="properties to be used for condition", required=False)
+    parser.add_argument('--model_path', type=str, default='',
+                        help="path of model weights to load", required=False)
 
     args = parser.parse_args()
 
@@ -50,7 +56,7 @@ if __name__ == '__main__':
 
     wandb.init(project="", name=args.run_name)
 
-    data = pd.read_csv()
+    data = pd.read_csv(args.data_path)
     
     data = data.dropna(axis=0).reset_index(drop=True)
     
@@ -108,8 +114,9 @@ if __name__ == '__main__':
     #                 '[CH-]', '[Cl-]', '[N+]', '[N-]', '[NH+]', '[NH2+]', '[NH3+]', '[NH]', '[O-]', '[O]', '[PH]', '[SiH]', '[Si]', '[c-]',
     #                 '[cH-]', '[n+]', '[n-]', '[nH+]', '[nH]', '\\', 'c', 'n', 'o', 's']
 
-   
-
+    content = ' '.join(list(smiles.values) + list(vsmiles.values) + list(scaffold.values) + list(vscaffold.values))
+    chars = sorted(list(set(regex.findall(content))))
+    whole_string = chars
 
     train_dataset = SmileDataset(args, smiles, whole_string, max_len, prop=prop, aug_prob=0, scaffold=scaffold, scaffold_maxlen= scaffold_max_len)
     valid_dataset = SmileDataset(args, vsmiles, whole_string, max_len, prop=vprop, aug_prob=0, scaffold=vscaffold, scaffold_maxlen= scaffold_max_len)
@@ -118,7 +125,10 @@ if __name__ == '__main__':
                         n_layer=args.n_layer, n_head=args.n_head, n_embd=args.n_embd, scaffold=args.scaffold, scaffold_maxlen=scaffold_max_len,
                         lstm=args.lstm, lstm_layers=args.lstm_layers)
  
-    model = torch.load()
+    if args.model_path:
+        model = torch.load(args.model_path)
+    else:
+        model = GPT(mconf)
     tconf = TrainerConfig(max_epochs=args.max_epochs, batch_size=args.batch_size, learning_rate=args.learning_rate,
                             lr_decay=True, warmup_tokens=0.1*len(train_data)*max_len, final_tokens=args.max_epochs*len(train_data)*max_len,
                             num_workers=10, ckpt_path=f'{args.run_name}.pt', block_size=train_dataset.max_len, generate=False)

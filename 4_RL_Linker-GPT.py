@@ -53,18 +53,27 @@ if __name__ == '__main__':
                         help="total epochs", required=False)
     parser.add_argument('--batch_size', type=int, default=64,
                         help="batch size", required=False)
-    parser.add_argument('--learning_rate', type=int,
+    parser.add_argument('--learning_rate', type=float,
                         default=6e-4, help="learning rate", required=False)
     parser.add_argument('--lstm_layers', type=int, default=0,
                         help="number of layers in lstm", required=False)
     parser.add_argument('--block_size', type=int, default=369, help="number of layers",
                         required=False)
+    parser.add_argument('--data_path', type=str, default='data/QM9.csv',
+                        help="path of data csv", required=False)
+    parser.add_argument('--props', nargs='+', default=['qed'],
+                        help="properties to be used for condition", required=False)
+    parser.add_argument('--model_path', type=str, default='',
+                        help="path of model weights to load", required=False)
+    parser.add_argument('--grad_norm_clip', type=float, default=1.0,
+                        help="gradient norm clipping", required=False)
+
     args = parser.parse_args()
 
 
     set_seed(42)
 
-    data = pd.read_csv()
+    data = pd.read_csv(args.data_path)
 
     data = data.dropna(axis=0).reset_index(drop=True)
     data.columns = data.columns.str.lower()
@@ -111,6 +120,10 @@ if __name__ == '__main__':
     vscaffold = [i + str('<') * (scaffold_max_len -
                                  len(regex.findall(i.strip()))) for i in vscaffold]
 
+    content = ' '.join(list(smiles.values) + list(vsmiles.values) + list(scaffold.values) + list(vscaffold.values))
+    chars = sorted(list(set(regex.findall(content))))
+    whole_string = chars
+
     train_dataset = SmileDataset(args, smiles, whole_string, max_len, prop=prop, aug_prob=0, scaffold=scaffold,
                                  scaffold_maxlen=scaffold_max_len)
     valid_dataset = SmileDataset(args, vsmiles, whole_string, max_len, prop=vprop, aug_prob=0, scaffold=vscaffold,
@@ -120,13 +133,21 @@ if __name__ == '__main__':
                       n_layer=args.n_layer, n_head=args.n_head, n_embd=args.n_embd, scaffold=args.scaffold,
                       scaffold_maxlen=scaffold_max_len,
                       lstm=args.lstm, lstm_layers=args.lstm_layers)
-    model = torch.load()
+    
+    if args.model_path:
+        model = torch.load(args.model_path)
+    else:
+        model = GPT(mconf)
+        
     Prior = model
     Agent = model
     device = 'cuda'
     model.to('cuda')
     print('Model loaded')
-    f = open(f"RL/loss", "wb")
+    
+    # Create directory for saving losses if it doesn't exist
+    os.makedirs("RL", exist_ok=True)
+    f = open(f"RL/loss.txt", "w")
 
 
     for epoch in range(args.max_epochs):
@@ -136,11 +157,11 @@ if __name__ == '__main__':
         #               dtype=np.float32)  # to keep all reward components between [0,1]
         # score =  qed + sa
         score = ring_func()(seq)
-        scores =   Variable(score).unsqueeze(0)
-        losses=[]
-        smiles_save=[]
-        scoreindex = list(np.where(success_score >3))
-        success_smiles = np.array(smiles)[scoreindex]
+        scores = torch.tensor(score).unsqueeze(0)
+        losses = []
+        smiles_save = []
+        scoreindex = list(np.where(score > 3))
+        success_smiles = np.array(seq)[scoreindex]
         smiles_save.extend(success_smiles)
         is_train = 'train'
         model.train()
@@ -172,24 +193,37 @@ if __name__ == '__main__':
                     loss = 10*loss + 0.1*loss1 # collapse all losses if they are scattered on multiple gpus
                     loss = loss.mean()
                     losses.append(loss.item())
-            optimizer = model.configure_optimizers(TrainerConfig)
+            
+            # Create TrainerConfig instance
+            tconf = TrainerConfig(
+                max_epochs=args.max_epochs,
+                batch_size=args.batch_size,
+                learning_rate=args.learning_rate,
+                grad_norm_clip=args.grad_norm_clip,
+                lr_decay=True,
+                warmup_tokens=0.1*len(train_data)*max_len,
+                final_tokens=args.max_epochs*len(train_data)*max_len,
+                num_workers=0,
+                ckpt_path=f'RL.pt'
+            )
+            
+            optimizer = model.configure_optimizers(tconf)
             scaler = GradScaler()
             model.zero_grad()
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), TrainerConfig.grad_norm_clip)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), tconf.grad_norm_clip)
             scaler.step(optimizer)
             scaler.update()
-        ckpt_path=f'RL.pt'
+        ckpt_path = f'RL.pt'
         print(f"save model {ckpt_path.replace('.pt', f'-{epoch}.pt')}")
         torch.save(model, ckpt_path.replace('.pt', f"-{epoch}.pt"))
         print(
-                f"{epoch + 1}/{args.max_epochs}   {round(loss.item(), 4)}        "
-            )
+            f"{epoch + 1}/{args.max_epochs}   {round(loss.item(), 4)}        "
+        )
         # wandb.log({"epoch": epoch + 1, "train_loss": loss.item(), "val_loss": loss_eval.item()})
-        f.write(f"{epoch + 1},{loss}\n".encode("utf-8"))
+        f.write(f"{epoch + 1},{loss.item()}\n")  # Fixed encoding issue
+        f.flush()  # Ensure data is written to file
         sleep(1e-2)
+    
     f.close()
-e
-e
-

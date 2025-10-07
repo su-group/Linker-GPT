@@ -31,6 +31,21 @@ pre-training models are placed under `model/pretrain` folder
 
 Fine-tuning models are placed under `model/fine-tuning` folder
 
+<h3>Pre-training Data Format</h3>
+The pre-training data should be in CSV format with the following columns:
+
+```csv
+smiles,source,scaffold_smiles
+CCC1=C(C(=NO1)C(=O)NC1CC1)C(=O)N1CCC(C1)NC(=O)C1CC1,train,O=C(NC1CC1)C1=C(C(=NO1)C(=O)N1CCC(C1)NC(=O)C1CC1)C
+CC(C)(C)C1CCC(=CC1)C1=CC=C(C=C1)C(=O)NC1CC1,train,O=C(NC1CC1)C1=CC=C(C=C1)C1=CC=C(C=C1)C1CCC(=CC1)C(C)(C)C
+CC1(C)CCC(=CC1)C1=CC=C(C=C1)C(=O)NC1CC1,train,O=C(NC1CC1)C1=CC=C(C=C1)C1=CC=C(C=C1)C1CCC(=CC1)C1(C)CCC1
+```
+
+Where:
+- `smiles`: The SMILES representation of the molecule
+- `source`: The source of the data (train/val/test)
+- `scaffold_smiles`: The SMILES representation of the molecular scaffold
+
 <h2 id="RiLtE">Getting Started</h2>
 Users can customize their own tasks by modifying the code.  Users can run the Linker-GPT model by excuting the 1-4 .py files in sequence according to the following script.
 
@@ -60,4 +75,3 @@ python 4_RL_Linker-GPT.py --max_epoch{total_epochs} --bach_size 128 --path{path_
 
 <h2 id="XdWqS">License</h2>
 This project is licensed under the MIT License.
-

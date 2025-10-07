@@ -36,7 +36,7 @@ if __name__ == '__main__':
     parser.add_argument('--csv_name', type=str, help="name to save the generated mols in csv format",
                         default='pretrain',required=False)
     parser.add_argument('--batch_size', type=int, default=128, help="batch size", required=False)
-    parser.add_argument('--gen_size', type=int, default=, help="number of times to generate from a batch",
+    parser.add_argument('--gen_size', type=int, default=1000, help="number of times to generate from a batch",
                         required=False)
     parser.add_argument('--vocab_size', type=int, default=355, help="number of layers",
                         required=False)  #sca max len
@@ -47,12 +47,15 @@ if __name__ == '__main__':
     parser.add_argument('--n_head', type=int, default=8, help="number of heads", required=False)
     parser.add_argument('--n_embd', type=int, default=256, help="embedding dimension", required=False)
     parser.add_argument('--lstm_layers', type=int, default=3, help="number of layers in lstm", required=False)
+    parser.add_argument('--data_path', type=str, default='data/QM9.csv', help="path of data csv", required=False)
+    parser.add_argument('--scaffold', action='store_true', default=False, help='use scaffold information', required=False)
+    parser.add_argument('--prop_condition', nargs="+", default=None, help="properties values for conditioning", required=False)
 
     args = parser.parse_args()
 
     context = "C"
 
-    data = pd.read_csv()
+    data = pd.read_csv(args.data_path)
     data = data.dropna(axis=0).reset_index(drop=True)
     data.columns = data.columns.str.lower()
 
@@ -90,7 +93,7 @@ if __name__ == '__main__':
     print(chars)
     stoi = { ch:i for i,ch in enumerate(chars) }
     print(stoi)
-    with open(f'', 'w') as f:
+    with open(f'stoi.json', 'w') as f:
              json.dump(stoi, f)
 
     #stoi = json.load(open(f'data/gs.json', 'r'))
@@ -107,7 +110,7 @@ if __name__ == '__main__':
                       lstm=args.lstm, lstm_layers=args.lstm_layers)
 
 
-    model= torch.load()
+    model = torch.load(args.model_weight)
     model.to('cuda')
     print('Model loaded')
 
@@ -182,9 +185,9 @@ if __name__ == '__main__':
         all_dfs.append(results)
 
 
-    elif (prop_condition is not None) and (scaf_condition is None):
+    elif (hasattr(args, 'prop_condition') and args.prop_condition is not None) and (scaf_condition is None):
         count = 0
-        for c in prop_condition:
+        for c in args.prop_condition:
             molecules = []
             count += 1
             for i in tqdm(range(gen_iter)):
@@ -301,39 +304,15 @@ if __name__ == '__main__':
             results['novelty'] = np.round(novel_ratio / 100, 3)
             all_dfs.append(results)
 
-                print(f'Condition: {c}')
-                print(f'Scaffold: {j}')
-                print('Valid ratio: ', np.round(len(results) / (args.batch_size * gen_iter), 3))
-                print('Unique ratio: ', np.round(len(unique_smiles) / len(results), 3))
-                print('Novelty ratio: ', np.round(novel_ratio / 100, 3))
-
-                if len(args.props) == 1:
-                    results['condition'] = c
-                elif len(args.props) == 2:
-                    results['condition'] = str((c[0], c[1]))
-                else:
-                    results['condition'] = str((c[0], c[1], c[2]))
-
-                results['scaffold_cond'] = j
-                results['qed'] = results['molecule'].apply(lambda x: QED.qed(x))
-                results['sas'] = results['molecule'].apply(lambda x: sascorer.calculateScore(x))
-                results['logp'] = results['molecule'].apply(lambda x: Crippen.MolLogP(x))
-                results['tpsa'] = results['molecule'].apply(lambda x: CalcTPSA(x))
-                # results['temperature'] = temp
-                results['validity'] = np.round(len(results) / (args.batch_size * gen_iter), 3)
-                results['unique'] = np.round(len(unique_smiles) / len(results), 3)
-                results['novelty'] = np.round(novel_ratio / 100, 3)
-                all_dfs.append(results)
-
     results = pd.concat(all_dfs)
-    results.to_csv( args.csv_name, index=False)
+    results.to_csv(args.csv_name, index=False)
 
     unique_smiles = list(set(results['smiles']))
     canon_smiles = [canonic_smiles(s) for s in results['smiles']]
     unique_smiles = list(set(canon_smiles))
- 
+
     novel_ratio = check_novelty(unique_smiles, set(
-    data[data['source'] == 'train']['smiles']))  
+        data[data['source'] == 'train']['smiles']))
 
     print('Valid ratio: ', np.round(len(results) / (args.batch_size * gen_iter * count), 3))
     print('Unique ratio: ', np.round(len(unique_smiles) / len(results), 3))

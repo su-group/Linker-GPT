@@ -22,6 +22,8 @@ if __name__ == '__main__':
 
     parser.add_argument('--run_name', type=str,default='',
                         help="name for wandb run", required=False)
+    parser.add_argument('--data_path', type=str,default='data/QM9.csv',
+                        help="path of data csv", required=False)
     parser.add_argument('--debug', action='store_true',
                         default=False, help='debug')
     parser.add_argument('--scaffold', action='store_true',
@@ -44,13 +46,14 @@ if __name__ == '__main__':
     parser.add_argument('--lstm_layers', type=int, default=0,
                         help="number of layers in lstm", required=False)
 
+
     args = parser.parse_args()
 
     set_seed(42)
 
     wandb.init(project="linker-gpt", name=args.run_name)
 
-    data = pd.read_csv('')
+    data = pd.read_csv(args.data_path)
    
     data = data.dropna(axis=0).reset_index(drop=True)
    
