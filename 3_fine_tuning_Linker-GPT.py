@@ -1,141 +1,127 @@
 import pandas as pd
 import argparse
-from utils import set_seed
-import numpy as np
-import wandb
-
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-from torch.nn import functional as F
-from torch.cuda.amp import GradScaler
-
-from molgpt import GPT, GPTConfig
-from trainer import Trainer, TrainerConfig
-from dataset import SmileDataset
-import math
-from utils import SmilesEnumerator
 import re
-if __name__ == '__main__':
+import numpy as np
+import torch
+from torch.utils.data import DataLoader
+import wandb
+from molgpt.utils import set_seed
+from molgpt.model import GPT, GPTConfig
+from molgpt.trainer import Trainer, TrainerConfig
+from molgpt.dataset import SmileDataset
 
+def main():
     parser = argparse.ArgumentParser()
-
-    parser.add_argument('--run_name', type=str,default='',
-                        help="name for wandb run", required=False)
-    parser.add_argument('--debug', action='store_true',
-                        default=False, help='debug')
-    parser.add_argument('--scaffold', action='store_true',
-                        default=False, help='condition on scaffold')
-    parser.add_argument('--lstm', action='store_true',
-                        default=False, help='use lstm for transforming scaffold')
-    parser.add_argument('--num_props', type=int, default = 0, help="number of properties to use for condition", required=False)
-    parser.add_argument('--n_layer', type=int, default=8,
-                        help="number of layers", required=False)
-    parser.add_argument('--n_head', type=int, default=8,
-                        help="number of heads", required=False)
-    parser.add_argument('--n_embd', type=int, default=256,
-                        help="embedding dimension", required=False)
-    parser.add_argument('--max_epochs', type=int, default=50,
-                        help="total epochs", required=False)
-    parser.add_argument('--batch_size', type=int, default=128,
-                        help="batch size", required=False)
-    parser.add_argument('--learning_rate', type=float,
-                        default=6e-4, help="learning rate", required=False)
-    parser.add_argument('--lstm_layers', type=int, default=0,
-                        help="number of layers in lstm", required=False)
-    parser.add_argument('--data_path', type=str, default='data/QM9.csv',
-                        help="path of data csv", required=False)
-    parser.add_argument('--props', nargs='+', default=['qed'],
-                        help="properties to be used for condition", required=False)
-    parser.add_argument('--model_path', type=str, default='',
-                        help="path of model weights to load", required=False)
-
+    parser.add_argument('--run_name', type=str, default='finetune', help="Name for wandb run")
+    parser.add_argument('--debug', action='store_true', default=False)
+    parser.add_argument('--scaffold', action='store_true', default=False, help='Condition on scaffold')
+    parser.add_argument('--lstm', action='store_true', default=False, help='Use LSTM for scaffold')
+    parser.add_argument('--n_layer', type=int, default=8)
+    parser.add_argument('--n_head', type=int, default=8)
+    parser.add_argument('--n_embd', type=int, default=256)
+    parser.add_argument('--max_epochs', type=int, default=50)
+    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--learning_rate', type=float, default=6e-4)
+    parser.add_argument('--lstm_layers', type=int, default=0)
+    parser.add_argument('--data_path', type=str, required=True, help="Path to CSV data")
+    parser.add_argument('--props', nargs='*', default=['qed'], help="Property columns to condition on (e.g., qed)")
+    parser.add_argument('--model_path', type=str, required=True, help="Path to pretrained .pt model")
     args = parser.parse_args()
 
     set_seed(42)
+    wandb.init(project="linker-gpt", name=args.run_name, config=args)
 
-    wandb.init(project="", name=args.run_name)
+    checkpoint = torch.load(args.model_path, map_location='cpu')
+    original_config_dict = checkpoint['model_config']
+    stoi = checkpoint['stoi']
+    itos = {int(k): v for k, v in checkpoint['itos'].items()}
 
     data = pd.read_csv(args.data_path)
-    
-    data = data.dropna(axis=0).reset_index(drop=True)
-    
-    data.columns = data.columns.str.lower()
+    data.columns = data.columns.str.lower().str.strip()
+    data = data.dropna(subset=['smiles']).reset_index(drop=True)
 
-    train_data = data[data['source'] == 'train'].reset_index(
-            drop=True)   
+    if 'source' not in data.columns:
+        raise ValueError("CSV must contain a 'source' column with values 'train'/'val'")
+    train_data = data[data['source'] == 'train'].reset_index(drop=True)
+    val_data = data[data['source'] == 'val'].reset_index(drop=True)
 
-    # train_data = train_data.sample(frac = 0.1, random_state = 42).reset_index(drop=True)
+    num_props = len(args.props)
+    if num_props > 0:
+        missing = [p for p in args.props if p not in train_data.columns]
+        if missing:
+            raise ValueError(f"Missing property columns in CSV: {missing}")
+        train_nan = train_data[args.props].isnull().sum()
+        val_nan = val_data[args.props].isnull().sum()
+        if train_nan.any() or val_nan.any():
+            print("Warning: NaN values found in property columns. Dropping affected rows.")
+            train_data = train_data.dropna(subset=args.props).reset_index(drop=True)
+            val_data = val_data.dropna(subset=args.props).reset_index(drop=True)
 
-    val_data = data[data['source'] == 'val'].reset_index(
-            drop=True)  
+    prop_train = train_data[args.props].values.astype(np.float32).tolist() if num_props > 0 else None
+    prop_val = val_data[args.props].values.astype(np.float32).tolist() if num_props > 0 else None
 
-    # val_data = val_data.sample(frac = 0.1, random_state = 42).reset_index(drop=True)
-
-    smiles = train_data['smiles']
-    vsmiles = val_data['smiles']
-
-    # prop = train_data[['qed']]
-    # vprop = val_data[['qed']]
-
-    prop = train_data[args.props].values.tolist()
-    vprop = val_data[args.props].values.tolist()
-    num_props = args.num_props
-
-    scaffold = train_data['scaffold_smiles']
-    vscaffold = val_data['scaffold_smiles']
-
-    pattern = "(\[[^\]]+]|<|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\\\|\/|:|~|@|\?|>|\*|\$|\%[0-9]{2}|[0-9])"
+    pattern = r"(\[[^\]]+]|<|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\\\|\/|:|~|@|\?|>|\*|\$|\%[0-9]{2}|[0-9])"
     regex = re.compile(pattern)
 
-    lens = [len(regex.findall(i.strip()))
-              for i in (list(smiles.values) + list(vsmiles.values))]
-    max_len = max(lens)
-    print('Max len: ', max_len)
+    all_smiles = train_data['smiles'].tolist() + val_data['smiles'].tolist()
+    lens = [len(regex.findall(s.strip())) for s in all_smiles]
+    max_len = min(max(lens), original_config_dict['block_size'])
 
-    lens = [len(regex.findall(i.strip()))
-            for i in (list(scaffold.values) + list(vscaffold.values))]
-    scaffold_max_len = max(lens)
-    print('Scaffold max len: ', scaffold_max_len)
+    scaffold_max_len = original_config_dict.get('scaffold_maxlen', 0)
+    if args.scaffold:
+        if 'scaffold_smiles' not in train_data.columns:
+            raise ValueError("scaffold_smiles column required when --scaffold is used")
+        all_scaffolds = train_data['scaffold_smiles'].tolist() + val_data['scaffold_smiles'].tolist()
+        scaf_lens = [len(regex.findall(s.strip())) for s in all_scaffolds]
+        scaffold_max_len = min(max(scaf_lens), scaffold_max_len)
 
-    smiles = [i + str('<')*(max_len - len(regex.findall(i.strip())))
-                for i in smiles]
-    vsmiles = [i + str('<')*(max_len - len(regex.findall(i.strip())))
-                for i in vsmiles]
+    def pad_smiles(smiles_list, length):
+        padded = []
+        for s in smiles_list:
+            tokens = regex.findall(s.strip())
+            if len(tokens) > length:
+                tokens = tokens[:length]
+            else:
+                tokens += ['<'] * (length - len(tokens))
+            padded.append(''.join(tokens))
+        return padded
 
-    scaffold = [i + str('<')*(scaffold_max_len -
-                                len(regex.findall(i.strip()))) for i in scaffold]
-    vscaffold = [i + str('<')*(scaffold_max_len -
-                                len(regex.findall(i.strip()))) for i in vscaffold]
+    train_smiles = pad_smiles(train_data['smiles'].tolist(), max_len)
+    val_smiles = pad_smiles(val_data['smiles'].tolist(), max_len)
+    train_scaf = pad_smiles(train_data['scaffold_smiles'].tolist(), scaffold_max_len) if args.scaffold else None
+    val_scaf = pad_smiles(val_data['scaffold_smiles'].tolist(), scaffold_max_len) if args.scaffold else None
 
- 
-    # whole_string = ['#', '%10', '%11', '(', ')', '-', '.', '/', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-    #                 '<', '=', 'Br', 'C', 'Cl', 'F', 'I', 'N', 'O', 'P', 'S', '[B-]', '[BH2-]', '[C-]', '[C@@H]', '[C@@]', '[C@H]', '[C@]',
-    #                 '[CH-]', '[Cl-]', '[N+]', '[N-]', '[NH+]', '[NH2+]', '[NH3+]', '[NH]', '[O-]', '[O]', '[PH]', '[SiH]', '[Si]', '[c-]',
-    #                 '[cH-]', '[n+]', '[n-]', '[nH+]', '[nH]', '\\', 'c', 'n', 'o', 's']
+    whole_string = [token for token, idx in sorted(stoi.items(), key=lambda x: x[1])]
+    train_dataset = SmileDataset(
+        args, train_smiles, whole_string, max_len,
+        prop=prop_train, aug_prob=0, scaffold=train_scaf, scaffold_maxlen=scaffold_max_len
+    )
+    valid_dataset = SmileDataset(
+        args, val_smiles, whole_string, max_len,
+        prop=prop_val, aug_prob=0, scaffold=val_scaf, scaffold_maxlen=scaffold_max_len
+    )
 
-    content = ' '.join(list(smiles.values) + list(vsmiles.values) + list(scaffold.values) + list(vscaffold.values))
-    chars = sorted(list(set(regex.findall(content))))
-    whole_string = chars
+    new_config_dict = original_config_dict.copy()
+    new_config_dict['num_props'] = num_props
+    mconf = GPTConfig(**new_config_dict)
+    model = GPT(mconf)
 
-    train_dataset = SmileDataset(args, smiles, whole_string, max_len, prop=prop, aug_prob=0, scaffold=scaffold, scaffold_maxlen= scaffold_max_len)
-    valid_dataset = SmileDataset(args, vsmiles, whole_string, max_len, prop=vprop, aug_prob=0, scaffold=vscaffold, scaffold_maxlen= scaffold_max_len)
+    model_dict = model.state_dict()
+    filtered_state_dict = {
+        k: v for k, v in checkpoint['model_state_dict'].items()
+        if k in model_dict and model_dict[k].shape == v.shape
+    }
+    model.load_state_dict(filtered_state_dict, strict=False)
 
-    mconf = GPTConfig(train_dataset.vocab_size, train_dataset.max_len, num_props=num_props,  
-                        n_layer=args.n_layer, n_head=args.n_head, n_embd=args.n_embd, scaffold=args.scaffold, scaffold_maxlen=scaffold_max_len,
-                        lstm=args.lstm, lstm_layers=args.lstm_layers)
- 
-    if args.model_path:
-        model = torch.load(args.model_path)
-    else:
-        model = GPT(mconf)
-    tconf = TrainerConfig(max_epochs=args.max_epochs, batch_size=args.batch_size, learning_rate=args.learning_rate,
-                            lr_decay=True, warmup_tokens=0.1*len(train_data)*max_len, final_tokens=args.max_epochs*len(train_data)*max_len,
-                            num_workers=10, ckpt_path=f'{args.run_name}.pt', block_size=train_dataset.max_len, generate=False)
-    trainer = Trainer(model, train_dataset, valid_dataset,
-                        tconf, train_dataset.stoi, train_dataset.itos)
+    tconf = TrainerConfig(
+        max_epochs=args.max_epochs, batch_size=args.batch_size, learning_rate=args.learning_rate,
+        lr_decay=True, warmup_tokens=0.1 * len(train_data) * max_len,
+        final_tokens=args.max_epochs * len(train_data) * max_len, num_workers=0,
+        ckpt_path=f"models/{args.run_name}.pt", block_size=max_len, generate=False
+    )
 
+    trainer = Trainer(model, train_dataset, valid_dataset, tconf, stoi, itos)
     trainer.train(wandb)
 
-
-
+if __name__ == '__main__':
+    main()

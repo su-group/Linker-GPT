@@ -1,77 +1,103 @@
-<h1 id="V9U6j">Design of Antibody-drug Conjugates Linkers with Molecular Generators and Reinforcement Learning</h1>
-<h2 id="R0uTF">ABSTRACT</h2>
-<font style="color:black;background-color:#FFFFFF;">The stability and release profile of antibody-drug conjugates (ADCs) are significantly influenced by the chemical linkers that connect the antibody and the cytotoxic drug. However, the limited diversity of available linkers leads to the repeated use of a small fraction of these in approved ADCs, highlighting the need for novel linker design. In this study, we trained an attention-based model, Linker-GPT, to design the linker portion of ADCs. The model consists of two parts: transfer learning and reinforcement learning. In the transfer learning part, the pre-trained model is fine-tuned using an integrated dataset of linkers, achieving generated molecule validity and novelty scores of 0.894 and 0.997, respectively. In the reinforcement learning part, the goal is to generate molecules with good synthesizability and favorable drug-like properties. This ultimately increases the proportion of molecules with ideal properties to 98.7%. The model can effectively be used for the exploration and screening of novel ADC linkers.</font>
+# Design of Antibody-Drug Conjugate Linkers with Molecular Generators and Reinforcement Learning
+English | [中文版](README_zh.md) 
+## ABSTRACT
 
-<h2 id="M5vDQ">Necessary package</h2>
-Recommended installation under Linux
+The stability and release profile of antibody-drug conjugates (ADCs) are significantly influenced by the chemical linkers that connect the antibody and the cytotoxic drug. However, the limited diversity of available linkers leads to the repeated use of a small fraction of these in approved ADCs, highlighting the need for novel linker design. In this study, we trained an attention-based model, **Linker-GPT**, to design the linker portion of ADCs. The model consists of two stages: transfer learning and reinforcement learning.  
 
-```plain
-python = 3.7.16
-pytorch = 1.13.1
-numpy
-pandas
-wandb
-RDKit = 2020.09.1.0
+In the transfer learning stage, the pre-trained model is fine-tuned using an integrated dataset of linkers, achieving generated molecule validity and novelty scores of **0.894** and **0.997**, respectively. In the reinforcement learning stage, the objective is to generate molecules with good synthesizability and favorable drug-like properties. This ultimately increases the proportion of molecules with ideal properties to **98.7%**. The model can effectively be used for the exploration and screening of novel ADC linkers.
+
+## Environment Setup
+
+### 1. Install Dependencies via `requirements.txt`
+
+Create and activate a Python 3.12+ virtual environment, then install core dependencies:
+
+```bash
+pip install -r requirements.txt
 ```
 
-<h2 id="KPvBG">Data and Models</h2>
-We provide the data used, the trained Linker-GPT pre-trained model, and the fine-tuned model after transfer learning.
+### 2. Install MOSES
 
-Pre-training data can be downloaded from the link below.
+This project uses [MOSES](https://github.com/molecularsets/moses) for molecular evaluation metrics (e.g., validity, novelty). Install it as follows:
 
-[ChEMBL](https://www.ebi.ac.uk/chembl/)
+```bash
+git lfs install
+git clone https://github.com/molecularsets/moses.git
+python setup.py install
+```
 
-[ZINC](https://zinc12.docking.org/)
+> **Note for PyTorch ≥ 2.0 users**:  
+> MOSES contains legacy code incompatible with newer Python/RDKit versions. Please apply the following patch to `moses/metrics/SA_Score/sascorer.py`:
+>
+> - **Line 6**: Comment out or remove  
+>   ```python
+>   # from rdkit.six import iteritems
+>   ```
+> - **Line 63**: Replace  
+>   ```python
+>   for bitId, v in iteritems(fps):
+>   ```
+>   with  
+>   ```python
+>   for bitId, v in fps.items():
+>   ```
 
-[QM9](https://paperswithcode.com/dataset/qm9)
+This ensures compatibility with modern Python dictionaries.
 
- Linkers dataset for fine-tuning  is placed under the `data` folder
+## Data and Models
 
-pre-training models are placed under `model/pretrain` folder
+We provide the datasets used, the pre-trained Linker-GPT model, and the fine-tuned model after transfer learning.
 
-Fine-tuning models are placed under `model/fine-tuning` folder
+- **Pre-training data**: Download from the following sources:
+  - [ChEMBL](https://www.ebi.ac.uk/chembl/)
+  - [ZINC](https://zinc.docking.org/)
+  - [QM9](https://figshare.com/articles/dataset/Quantum_chemistry_structures_and_properties_of_134_kilo_molecules/978905)
 
-<h3>Pre-training Data Format</h3>
-The pre-training data should be in CSV format with the following columns:
+- **Fine-tuning dataset**: Located in the `data/` folder.
 
-```csv
+- **Pre-trained models**: Stored in `model/pretrain/`.
+
+- **Fine-tuned models**: Stored in `model/fine-tuning/`.
+
+### Pre-training Data Format
+
+The pre-training data must be in CSV format with the following columns:
+
+```
 smiles,source,scaffold_smiles
 CCC1=C(C(=NO1)C(=O)NC1CC1)C(=O)N1CCC(C1)NC(=O)C1CC1,train,O=C(NC1CC1)C1=C(C(=NO1)C(=O)N1CCC(C1)NC(=O)C1CC1)C
-CC(C)(C)C1CCC(=CC1)C1=CC=C(C=C1)C(=O)NC1CC1,train,O=C(NC1CC1)C1=CC=C(C=C1)C1=CC=C(C=C1)C1CCC(=CC1)C(C)(C)C
-CC1(C)CCC(=CC1)C1=CC=C(C=C1)C(=O)NC1CC1,train,O=C(NC1CC1)C1=CC=C(C=C1)C1=CC=C(C=C1)C1CCC(=CC1)C1(C)CCC1
+...
 ```
 
 Where:
-- `smiles`: The SMILES representation of the molecule
-- `source`: The source of the data (train/val/test)
-- `scaffold_smiles`: The SMILES representation of the molecular scaffold
+- `smiles`: SMILES representation of the full molecule.
+- `source`: Data split (`train`/`val`/`test`).
+- `scaffold_smiles`: SMILES of the molecular scaffold.
 
-<h2 id="RiLtE">Getting Started</h2>
-Users can customize their own tasks by modifying the code.  Users can run the Linker-GPT model by excuting the 1-4 .py files in sequence according to the following script.
+## Getting Started
 
-`pretraining.py` is used for pre-training models. Pre-training datasets can be replaced by modifying read paths.
+Run the pipeline in sequence:
 
-```plain
-  python 1_pretrain_Linker-GPT.py --run_name{name_for_wandb_run} --data_path{your_pretrain_data}
-```
+1. **Pre-training**
+   ```bash
+   python 1_pretrain_Linker-GPT.py --run_name <name> --data_path <pretrain.csv>
+   ```
 
-`<font style="color:rgb(44, 44, 54);">generation.py</font>`<font style="color:rgb(44, 44, 54);"> is used for molecule generation and save the generated molecules in CSV format.</font>
+2. **Generation (for evaluation)**
+   ```bash
+   python 2_gen_Linker-GPT.py --gen_size 1000 --csv_name output.csv
+   ```
 
-```plain
-python 2_gen_Linker-GPT.py --gen_size{number_of_times_to_generate_from_a_batch} --csv_path{save_path_for_generate_moleculars}
-```
+3. **Fine-tuning (Transfer Learning)**
+   ```bash
+   python 3_fine_tuning_Linker-GPT.py --run_name <name> --data_path <finetune.csv> --model_path <pretrain.pt>
+   ```
 
-`fine_tuning.py` is used for transfer learning. Fine-tuning datasets can be replaced by modifying read paths.
+4. **Reinforcement Learning**
+   ```bash
+   python 4_RL_Linker-GPT.py --max_epochs 50 --batch_size 64 --model_path <finetune.pt>
+   ```
 
-```plain
-python 3_fine_tuning_Linker-GPT.py --run_name{name_for_wandb_run} --data_path{your_fine_tuning_data}
-```
+## License
 
-`<font style="color:rgb(44, 44, 54);">RL.py</font>`<font style="color:rgb(44, 44, 54);"> is used for reinforcement learning. By default, it uses molecular properties such as QED (Quantitative Estimate of Drug-likeness), SAS (Synthetic Accessibility Score), and the number of rings.</font>
-
-```plain
-python 4_RL_Linker-GPT.py --max_epoch{total_epochs} --bach_size 128 --path{path_to_save_agent_model}
-```
-
-<h2 id="XdWqS">License</h2>
 This project is licensed under the MIT License.
